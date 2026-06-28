@@ -17,9 +17,8 @@ Drive **Gemini Web** (gemini.google.com) programmatically via Chrome CDP on Wind
 
 ## Prerequisites
 
-- **Unified tool (recommended)**: `C:\Users\Administrator\gemini_agent.py` — one script for launch, navigate, model switching, send, read, screenshot. Auto-installs missing deps.
-- Fallback: `C:\Users\Administrator\chrome_cdp.py` (see `local-chrome-control` skill)
-- GFW launch script: `C:\Users\Administrator\launch_gemini_chrome.py`
+- **Unified tool (recommended)**: `C:\\Users\\Administrator\\gemini_agent.py` — one script for launch, navigate, model switching, send, read, screenshot. Auto-installs missing deps.
+- Fallback: `C:\\Users\\Administrator\\chrome_cdp.py` (see `local-chrome-control` skill)
 - Python packages: `websockets`, `requests` (auto-installed by `gemini_agent.py`)
 - SOCKS5 proxy running (v2rayN on `127.0.0.1:10808`)
 - Google account logged in once (persists in `~/.chrome-cdp-profile`)
@@ -84,8 +83,16 @@ python /c/Users/Administrator/gemini_agent.py read
 
 ### 1. Launch Chrome with GFW bypass (if not already running)
 
+Use `gemini_agent.py launch` which bundles all GFW flags:
+
 ```bash
-python /c/Users/Administrator/launch_gemini_chrome.py
+python /c/Users/Administrator/gemini_agent.py launch
+```
+
+Or via the generic CDP controller with flags injected:
+
+```bash
+python /c/Users/Administrator/chrome_cdp.py launch --kill
 ```
 
 This kills existing Chrome, restarts with:
@@ -221,7 +228,8 @@ See `references/test-session-2026-06-28.md` for the exact tested commands, DOM s
 
 ## Companion scripts
 
-- `scripts/gemini_agent.py` — unified tool (launch, navigate, pro-extended, send, read, screenshot). Copy to `C:\\Users\\Administrator\\` for PATH access.
+- `scripts/gemini_agent.py` — unified tool (launch, navigate, pro-extended, send, read, screenshot). Copy to `C:\\\\Users\\\\Administrator\\\\` for PATH access.
+- Published on GitHub: [`zztap/gemini-web-agent`](https://github.com/zztap/gemini-web-agent) — clone or fork to share with other machines.
 
 See the `local-chrome-control` skill's `templates/chrome_cdp.py` for the generic CDP controller used as fallback.
 

@@ -383,8 +383,80 @@ def action_status():
 
     asyncio.run(_check())
 
-def action_send(text):
-    """Send a prompt to Gemini."""
+def needs_pro_extended(text):
+    """Auto-detect if a prompt needs Pro Extended Thinking."""
+    # Explicitly asked for concise → Flash
+    if text.startswith("请用三句话") or text.startswith("用三句话"):
+        return False
+    # Keywords that suggest deep reasoning → Pro Extended
+    deep_keywords = [
+        "分析", "解释", "为什么", "原理", "mechanism",
+        "explain", "why", "analyze", "compare", "对比",
+        "复杂", "深度", "本质", "推理", "derive",
+        "核心洞察", "矛盾", "悖论", "争议",
+        "implications", "consequences", "fundamental",
+        "如何工作", "区别", "差异", "优缺点",
+    ]
+    text_lower = text.lower()
+    for kw in deep_keywords:
+        if kw in text_lower or kw in text:
+            return True
+    # Short/trivial → Flash
+    if len(text) < 60:
+        return False
+    # Long text → Pro Extended
+    if len(text) > 200:
+        return True
+    return False
+
+
+def action_flash():
+    """Switch Gemini back to Flash mode to save quota."""
+    async def _switch():
+        ws_url = ensure_cdp_connected()
+        if not ws_url:
+            print("❌ No Gemini tab found")
+            return False
+        await connect_if_needed(ws_url)
+        cdp = _cdp
+
+        # Check current mode
+        label = await cdp.eval(
+            "document.querySelector('button[aria-label*=\"模式\"]')?.ariaLabel || ''")
+        if "Flash" in str(label):
+            print("ℹ️  Already in Flash mode")
+            return True
+
+        # Open model selector
+        await cdp.click("button[aria-label*=\"模式选择器\"]")
+        await asyncio.sleep(1.5)
+
+        # Find Flash option (usually index 1)
+        items = await cdp.eval(
+            "Array.from(document.querySelectorAll('gem-menu-item')).map((e,i)=>({i:i,t:e.innerText.trim()}))")
+        flash_idx = None
+        for item in (items or []):
+            t = item.get("t", "")
+            if "Flash" in t and "Lite" not in t:
+                flash_idx = item["i"]
+                break
+        if flash_idx is not None:
+            await cdp.click("gem-menu-item", index=flash_idx)
+            await asyncio.sleep(1)
+            print(f"✅ Switched to Flash (saves quota)")
+        else:
+            print("  ⚠️ Flash option not found")
+
+        # Close menu
+        await cdp.eval(
+            "document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}))")
+        return True
+
+    return asyncio.run(_switch())
+
+
+def action_send(text, auto=False, force_flash=False):
+    """Send a prompt to Gemini. With --auto, decides Flash vs Pro Extended."""
     async def _send():
         ws_url = ensure_cdp_connected()
         if not ws_url:
@@ -392,6 +464,21 @@ def action_send(text):
             return
         await connect_if_needed(ws_url)
         cdp = _cdp
+
+        # Auto mode detection
+        if force_flash or (auto and not needs_pro_extended(text)):
+            label = await cdp.eval(
+                "document.querySelector('button[aria-label*=\"模式\"]')?.ariaLabel || ''")
+            if "Pro" in str(label) and "扩展" in str(label):
+                print("🔋 Flash mode (saves quota)")
+                await _ensure_flash(cdp)
+        elif auto and needs_pro_extended(text):
+            label = await cdp.eval(
+                "document.querySelector('button[aria-label*=\"模式\"]')?.ariaLabel || ''")
+            if "Pro" not in str(label) or "扩展" not in str(label):
+                print("🧠 Auto-switching to Pro Extended...")
+                await _ensure_pro_extended(cdp)
+
         # Focus textbox
         focus_js = """
         (() => {
@@ -411,12 +498,12 @@ def action_send(text):
         await cdp.call("Input.insertText", {"text": text})
         await asyncio.sleep(0.5)
 
-        # Click send button
+        # Click send
         send_js = """
         (() => {
             const btn = document.querySelector('button[aria-label="发送"]');
             if (!btn) return {error: 'send button not found'};
-            if (btn.disabled) return {error: 'button disabled (Angular change detection)'};
+            if (btn.disabled) return {error: 'button disabled'};
             const rect = btn.getBoundingClientRect();
             return {x: rect.left + rect.width/2, y: rect.top + rect.height/2};
         })()
@@ -424,7 +511,7 @@ def action_send(text):
         val = await cdp.eval(send_js)
         if isinstance(val, dict) and "error" in val:
             if "disabled" in val.get("error", ""):
-                print("  ⚠️ Send button disabled. Trying Angular trigger...")
+                print("  ⚠️ Triggering Angular change detection...")
                 await cdp.call("Input.insertText", {"text": " "})
                 await asyncio.sleep(0.3)
                 await cdp.call("Input.deleteContentBackward", {})
@@ -442,10 +529,57 @@ def action_send(text):
         await cdp.call("Input.dispatchMouseEvent",
                        {"type": "mouseReleased", "button": "left", "x": x, "y": y, "clickCount": 1})
 
-        print(f"✅ Prompt sent ({len(text)} chars)")
+        mode = "Pro Extended" if "Pro" in str(await cdp.eval(
+            "document.querySelector('button[aria-label*=\"模式\"]')?.ariaLabel || ''")) else "Flash"
+        print(f"✅ [{mode}] Prompt sent ({len(text)} chars)")
         print(f"   \"{text[:80]}{'...' if len(text)>80 else ''}\"")
 
-    asyncio.run(_send())
+    async def _ensure_flash(cdp):
+        """Switch to Flash mode."""
+        await cdp.click("button[aria-label*=\"模式选择器\"]")
+        await asyncio.sleep(1.5)
+        items = await cdp.eval(
+            "Array.from(document.querySelectorAll('gem-menu-item')).map((e,i)=>({i:i,t:e.innerText.trim()}))")
+        for item in (items or []):
+            if "Flash" in item.get("t", "") and "Lite" not in item.get("t", ""):
+                await cdp.click("gem-menu-item", index=item["i"])
+                await asyncio.sleep(1)
+                break
+        await cdp.eval("document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}))")
+        await asyncio.sleep(1)
+
+    async def _ensure_pro_extended(cdp):
+        """Inline Pro Extended switch."""
+        await cdp.click("button[aria-label*=\"模式选择器\"]")
+        await asyncio.sleep(1.5)
+        items = await cdp.eval(
+            "Array.from(document.querySelectorAll('gem-menu-item')).map((e,i)=>({i:i,t:e.innerText.trim()}))")
+        for item in (items or []):
+            if "Pro" in item.get("t", "") and "Flash" not in item.get("t", ""):
+                await cdp.click("gem-menu-item", index=item["i"])
+                await asyncio.sleep(1)
+                break
+        await cdp.click("button[aria-label*=\"模式选择器\"]")
+        await asyncio.sleep(1.5)
+        items = await cdp.eval(
+            "Array.from(document.querySelectorAll('gem-menu-item')).map((e,i)=>({i:i,t:e.innerText.trim()}))")
+        for item in (items or []):
+            if "思考" in item.get("t", ""):
+                await cdp.click("gem-menu-item", index=item["i"])
+                await asyncio.sleep(1.5)
+                items2 = await cdp.eval(
+                    "Array.from(document.querySelectorAll('gem-menu-item')).map((e,i)=>({i:i,t:e.innerText.trim()}))")
+                for item2 in (items2 or []):
+                    if "扩展" in item2.get("t", ""):
+                        await cdp.click("gem-menu-item", index=item2["i"])
+                        await asyncio.sleep(1)
+                        break
+                break
+        await cdp.eval("document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}))")
+        await asyncio.sleep(1)
+        print("  🧠 Pro Extended activated")
+
+    return asyncio.run(_send())
 
 def action_read(full=False):
     """Read Gemini's response."""
@@ -534,9 +668,16 @@ def main():
         action_status()
     elif action == "send":
         if len(sys.argv) < 3:
-            print("Usage: gemini_agent.py send \"your prompt\"")
+            print("Usage: gemini_agent.py send [--auto|--flash] \"your prompt\"")
             return
-        action_send(" ".join(sys.argv[2:]))
+        # Extract flags
+        auto = "--auto" in sys.argv
+        force_flash = "--flash" in sys.argv
+        # Collect text parts (skip flags)
+        parts = [a for a in sys.argv[2:] if not a.startswith("--")]
+        action_send(" ".join(parts), auto=auto, force_flash=force_flash)
+    elif action == "flash":
+        action_flash()
     elif action == "read":
         action_read(full="--full" in sys.argv)
     elif action == "screenshot":
